@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tour Dates</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>NBA Tour Dates tracker</h1>
+      <p>Season {{ season }}</p>
+    </header>
+
+    <main>
+      <section class="announcements">
+        <h2>Newly Announced Tour Dates</h2>
+        {% if new_dates %}
+          <table>
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Team</th>
+                <th>Opponent</th>
+                <th>Game Date</th>
+                <th>Tour Date</th>
+                <th>FG%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in new_dates %}
+                <tr>
+                  <td>{{ row.player_name }}</td>
+                  <td>{{ row.team_abbr }}</td>
+                  <td>{{ row.opponent_abbr }}</td>
+                  <td>{{ row.game_date }}</td>
+                  <td>{{ row.fgm }} / {{ row.fga }}</td>
+                  <td>{{ format_percentage(row.fg_pct) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p>No tour dates have been recorded for this season yet.</p>
+        {% endif %}
+      </section>
+
+      <section class="calendar">
+        <h2>Tour Date Almanac</h2>
+        <p>
+          Greyed-out days have yet to be announced. Click a claimed date to see the performances that earned it.
+        </p>
+        <div class="calendar-grid">
+          {% for month in calendar %}
+            <div class="calendar-month">
+              <h3>{{ month.name }}</h3>
+              <div class="calendar-days">
+                {% for day in month.days %}
+                  <details class="day {{ 'announced' if day.announced else 'unclaimed' }}">
+                    <summary>{{ day.day }}</summary>
+                    {% if day.announced %}
+                      <ul>
+                        {% for entry in day.entries %}
+                          <li>
+                            {{ entry.player_name }} vs {{ entry.opponent_abbr }} –
+                            {{ entry.fgm }} / {{ entry.fga }} ({{ format_percentage(entry.fg_pct) }})
+                            on {{ entry.game_date }}
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    {% else %}
+                      <p>No tour has stopped here yet.</p>
+                    {% endif %}
+                  </details>
+                {% endfor %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Built for the 2025-26 NBA season.</p>
+    </footer>
+  </body>
+</html>
+

@@ -1,0 +1,47 @@
+[
+  {
+    "season": "2025-26",
+    "player_name": "Jordan Poole",
+    "team_abbr": "WAS",
+    "opponent_abbr": "NYK",
+    "game_id": "0022500001",
+    "game_date": "2025-10-25",
+    "fgm": 3,
+    "fga": 27,
+    "fg_pct": 0.111
+  },
+  {
+    "season": "2025-26",
+    "player_name": "Jalen Green",
+    "team_abbr": "HOU",
+    "opponent_abbr": "DAL",
+    "game_id": "0022500012",
+    "game_date": "2025-11-02",
+    "fgm": 4,
+    "fga": 28,
+    "fg_pct": 0.143
+  },
+  {
+    "season": "2025-26",
+    "player_name": "Anfernee Simons",
+    "team_abbr": "POR",
+    "opponent_abbr": "LAL",
+    "game_id": "0022500105",
+    "game_date": "2025-12-18",
+    "fgm": 5,
+    "fga": 29,
+    "fg_pct": 0.172
+  },
+  {
+    "season": "2025-26",
+    "player_name": "Anthony Edwards",
+    "team_abbr": "MIN",
+    "opponent_abbr": "PHX",
+    "game_id": "0022600502",
+    "game_date": "2026-02-04",
+    "fgm": 2,
+    "fga": 20,
+    "fg_pct": 0.1
+  }
+]
+
