@@ -1,0 +1,25 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments (uv or otherwise)
+.venv/
+venv/
+python/.venv/
+
+# uv project artifacts
+.uv/
+
+# SQLite databases generated at runtime
+*.db
+*.sqlite
+*.sqlite3
+
+# OS junk
+.DS_Store
+Thumbs.db
+

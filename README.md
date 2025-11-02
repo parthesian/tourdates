@@ -19,8 +19,8 @@ Tour Dates is an NBA community project that tracks extremely poor shooting perfo
 ## Scraping Plan (2025-26 Season Focus)
 
 1. **Source discovery**
-   - Use stats.nba.com box score endpoints (or an HTML fallback as in the linked tutorial) because they expose per-player FGM/FGA/FG% along with game metadata.
-   - Respect rate limits by applying modest delays (1–2 seconds) between API calls.
+   - Use NBA.com's public schedule pages (e.g. [`/games?date=2025-11-02`](https://www.nba.com/games?date=2025-11-02)) to harvest game cards and derive game IDs, then follow the associated `/box-score` pages (e.g. [`/game/orl-vs-cha-0022500138/box-score`](https://www.nba.com/game/orl-vs-cha-0022500138/box-score)) for per-player shooting lines.
+   - Respect rate limits by applying modest delays (≈0.5s) between requests to avoid stressing NBA.com's infrastructure.
 2. **Database-aware backlog**
    - Read the SQLite database to collect existing `(season, game_id)` pairs and known tour date combinations `(fgm, fga)`.
    - Compute which calendar combinations are still missing within the 2025-26 season window (pre-season optional, regular season primary).
@@ -40,6 +40,12 @@ Tour Dates is an NBA community project that tracks extremely poor shooting perfo
 6. **Operational touches**
    - Provide CLI options for `--since YYYY-MM-DD` and `--until YYYY-MM-DD` to backfill specific ranges.
    - Log summary statistics (games scanned, candidates found, inserts) for monitoring.
+
+### Implementation Notes
+
+- The current scraper implementation follows the process above using `requests` + `BeautifulSoup` to parse the schedule and box score HTML.
+- Team abbreviations are normalised via a static mapping so the website can group performances cleanly.
+- Only player rows with valid FGM/FGA/FG% values are considered; totals and placeholder rows are ignored.
 
 ## Local Development
 
@@ -72,6 +78,6 @@ The Flask dev server will expose the site at `http://127.0.0.1:5000/`, including
 
 ## Next Steps
 
-- Implement the NBA data fetch layer using the plan above (stats.nba.com JSON endpoints recommended).
+- Harden the scraper with retries/back-off and add CLI flags for pacing or dry-run comparisons.
 - Add automated tests for the calendar logic and the filtering rules.
 - Replace the sample seed data with live entries from the 2025-26 season once scraping is wired up.

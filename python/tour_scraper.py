@@ -1,9 +1,8 @@
 """Utilities for collecting NBA "tour date" performances.
 
-This module currently focuses on orchestration and data hygiene. The actual
-network scraping step (pulling box scores from stats.nba.com) is intentionally
-left as a placeholder so that the project can be wired up incrementally without
-requiring working API credentials or network access.
+The scraper walks NBA.com's public schedule pages to discover recent games and
+parses each game's box score to surface extremely poor shooting performances
+that qualify as "tour dates".
 """
 
 from __future__ import annotations
@@ -13,13 +12,22 @@ import datetime as dt
 import json
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, Iterator, List, Sequence
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 DEFAULT_DB_PATH = REPO_ROOT / "web" / "tourdates.db"
+
+NBA_BASE_URL = "https://www.nba.com"
+NBA_SCHEDULE_URL = NBA_BASE_URL + "/games"
+USER_AGENT = "tourdates-scraper/0.1 (+https://github.com/parth/tourdates)"
 
 MONTH_DAY_LIMITS = {
     1: 31,
@@ -34,6 +42,39 @@ MONTH_DAY_LIMITS = {
     10: 31,
     11: 30,
     12: 31,
+}
+
+TEAM_NAME_TO_ABBR = {
+    "Atlanta Hawks": "ATL",
+    "Boston Celtics": "BOS",
+    "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA",
+    "Chicago Bulls": "CHI",
+    "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL",
+    "Denver Nuggets": "DEN",
+    "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW",
+    "Houston Rockets": "HOU",
+    "Indiana Pacers": "IND",
+    "LA Clippers": "LAC",
+    "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP",
+    "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX",
+    "Portland Trail Blazers": "POR",
+    "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS",
 }
 
 
@@ -62,6 +103,13 @@ class TourDatePerformance:
         return validate_tour_date(self.fgm, self.fga, self.fg_pct)
 
 
+@dataclass(slots=True, frozen=True)
+class GameMetadata:
+    game_id: str
+    url: str
+    game_date: dt.date
+
+
 def validate_tour_date(fgm: int, fga: int, fg_pct: float) -> bool:
     """Validate a potential tour date using the business rules."""
 
@@ -88,6 +136,149 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def iter_games_for_date(session: requests.Session, target_date: dt.date) -> Iterator[GameMetadata]:
+    url = f"{NBA_SCHEDULE_URL}?date={target_date.isoformat()}"
+    logging.debug("Fetching schedule: %s", url)
+    response = session.get(url, timeout=20)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    cards = soup.select("a[data-id='nba:games:main:game:card']")
+
+    seen: set[str] = set()
+    for card in cards:
+        href = card.get("href")
+        if not href:
+            continue
+        game_id = extract_game_id(href)
+        if not game_id or game_id in seen:
+            continue
+        seen.add(game_id)
+        full_url = urljoin(NBA_BASE_URL, href)
+        yield GameMetadata(game_id=game_id, url=full_url, game_date=target_date)
+
+
+def extract_game_id(href: str) -> str | None:
+    trimmed = href.strip().strip("/")
+    if not trimmed:
+        return None
+    parts = trimmed.split("-")
+    candidate = parts[-1]
+    return candidate if candidate.isdigit() else None
+
+
+def scrape_game_box_score(
+    session: requests.Session, game: GameMetadata, season: str
+) -> Iterator[TourDatePerformance]:
+    box_url = game.url.rstrip("/") + "/box-score"
+    logging.debug("Fetching box score: %s", box_url)
+    response = session.get(box_url, timeout=20)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    sections = soup.select("section.GameBoxscore_gbTableSection__zTOUg")
+
+    teams: list[dict[str, object]] = []
+    for section in sections:
+        header = section.find("h2")
+        if not header:
+            continue
+        team_name = header.get_text(strip=True)
+        team_abbr = TEAM_NAME_TO_ABBR.get(team_name)
+        if not team_abbr:
+            logging.warning(
+                "Unrecognised team name '%s' in game %s", team_name, game.game_id
+            )
+            continue
+
+        players = list(parse_player_rows(section))
+        if not players:
+            continue
+
+        teams.append({
+            "team_name": team_name,
+            "team_abbr": team_abbr,
+            "players": players,
+        })
+
+    if len(teams) < 1:
+        logging.debug("No team data extracted for game %s", game.game_id)
+        return
+
+    for idx, team in enumerate(teams):
+        opponent_abbr = (
+            teams[1 - idx]["team_abbr"] if len(teams) == 2 else "TBD"
+        )
+        for player in team["players"]:
+            yield TourDatePerformance(
+                season=season,
+                player_name=player["player_name"],
+                team_abbr=team["team_abbr"],
+                opponent_abbr=opponent_abbr,
+                game_id=game.game_id,
+                game_date=game.game_date,
+                fgm=player["fgm"],
+                fga=player["fga"],
+                fg_pct=player["fg_pct"],
+            )
+
+
+def parse_player_rows(section) -> Iterator[dict[str, object]]:
+    tbody = section.find("tbody")
+    if not tbody:
+        return
+
+    for row in tbody.find_all("tr"):
+        if row.find("span", class_="GameBoxscoreTable_totals__tM8PG"):
+            continue
+
+        cells = row.find_all("td")
+        if len(cells) < 5:
+            continue
+
+        player_cell = cells[0]
+        name_tag = player_cell.select_one(
+            ".GameBoxscoreTablePlayer_gbpNameFull__cf_sn"
+        )
+        if not name_tag:
+            continue
+
+        player_name = name_tag.get_text(strip=True)
+        fgm = parse_int(cells[2].get_text(strip=True))
+        fga = parse_int(cells[3].get_text(strip=True))
+        fg_pct = parse_percent(cells[4].get_text(strip=True))
+
+        if fgm is None or fga is None or fg_pct is None:
+            continue
+        if fga == 0:
+            continue
+
+        yield {
+            "player_name": player_name,
+            "fgm": fgm,
+            "fga": fga,
+            "fg_pct": fg_pct,
+        }
+
+
+def parse_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_percent(value: str) -> float | None:
+    cleaned = value.strip().replace("%", "")
+    if not cleaned or cleaned in {"--", "-"}:
+        return None
+    try:
+        numeric = float(cleaned)
+    except ValueError:
+        return None
+    return numeric / 100 if numeric > 1 else numeric
 
 
 def load_existing_game_ids(
@@ -169,13 +360,47 @@ def insert_performances(
 
 
 def fetch_box_scores_for_range(
-    season: str, since: dt.date, until: dt.date
+    season: str,
+    since: dt.date,
+    until: dt.date,
+    processed_game_ids: Iterable[str] | None = None,
 ) -> Iterable[TourDatePerformance]:
-    """Placeholder fetcher. Replace with stats.nba.com integration."""
+    """Scrape NBA.com box scores to discover qualifying tour dates."""
 
-    raise NotImplementedError(
-        "Scraping is not yet implemented. Follow the README plan to add it."
-    )
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
+
+    seen_ids = set(processed_game_ids or [])
+    current = since
+
+    while current <= until:
+        try:
+            games = list(iter_games_for_date(session, current))
+        except requests.RequestException as exc:  # pragma: no cover - network guard
+            logging.warning("Failed to load schedule for %s: %s", current, exc)
+            current += dt.timedelta(days=1)
+            continue
+
+        logging.debug("%s: discovered %d games", current, len(games))
+
+        for game in games:
+            if game.game_id in seen_ids:
+                logging.debug("Skipping already processed game %s", game.game_id)
+                continue
+
+            seen_ids.add(game.game_id)
+
+            try:
+                for perf in scrape_game_box_score(session, game, season):
+                    yield perf
+            except requests.RequestException as exc:  # pragma: no cover - network guard
+                logging.warning("Failed to fetch box score for %s: %s", game.game_id, exc)
+                continue
+
+            # be polite
+            time.sleep(0.5)
+
+        current += dt.timedelta(days=1)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -235,6 +460,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     logging.basicConfig(level=getattr(logging, args.log_level))
 
     conn = get_connection(args.db_path)
+    processed_game_ids = load_existing_game_ids(conn, args.season)
     since = args.since or infer_default_since(conn, args.season)
     until = args.until or dt.date.today()
 
@@ -246,14 +472,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.dry_run,
     )
 
-    try:
-        performances = list(fetch_box_scores_for_range(args.season, since, until))
-    except NotImplementedError as exc:
-        logging.error("%s", exc)
-        logging.info(
-            "Once scraping is implemented you can rerun this command to ingest new data."
+    performances = list(
+        fetch_box_scores_for_range(
+            args.season,
+            since,
+            until,
+            processed_game_ids=processed_game_ids,
         )
-        return
+    )
 
     valid = [perf for perf in performances if perf.is_valid_tour_date]
     logging.info("Found %d candidate performances (%d valid)", len(performances), len(valid))
